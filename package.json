@@ -1,0 +1,14 @@
+{
+  "name": "insightx-root",
+  "version": "1.0.0",
+  "private": true,
+  "description": "InsightX - Full-Stack AI/ML Project Health Risk & Intelligence Platform",
+  "scripts": {
+    "dev": "concurrently -k \"npm run backend\" \"npm run frontend\"",
+    "frontend": "npm run dev --prefix frontend",
+    "backend": "cd backend && python main.py"
+  },
+  "devDependencies": {
+    "concurrently": "^8.2.2"
+  }
+}
