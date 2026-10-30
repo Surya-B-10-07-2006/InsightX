@@ -39,6 +39,8 @@ export interface GitHubAnalyzeResponse {
   ci_status: string;
   compliance_score: number;
   release_blocking: boolean;
+  quality_fusion_grade?: string;
+  architecture_risk_index?: number;
 }
 
 export interface MLStep {
@@ -61,6 +63,10 @@ export interface FailureRanking {
   failure_type: string;
   probability: number;
   severity: 'CRITICAL' | 'HIGH' | 'MEDIUM' | 'LOW';
+  evidence?: string;
+  trigger_metric?: string;
+  trigger_value?: number;
+  affected_files?: string[];
 }
 
 export interface SHAPItem {
@@ -157,175 +163,272 @@ export interface TimeMachineData {
     day_14_risk_reduction: number;
     day_30_risk_reduction: number;
   };
-  confidence?: {
-    baseline: Array<number>;
-    mitigated: Array<number>;
-    worst_case: Array<number>;
-  };
 }
 
-export interface IntelligenceSections {
-  executive_risk_summary?: {
-    overall_risk: number;
-    risk_level: string;
-    model_confidence_pct: number;
-    primary_failure: string;
-    business_impact: string;
-    urgency: string;
-  };
-  what_will_fail_first?: Array<{
-    rank: number;
-    failure_type: string;
-    probability: number;
-    severity: string;
-    evidence: string;
-    affected_files_modules: string[];
-  }>;
-  top_risk_hotspots?: Array<{
-    file_module: string;
-    risk_score: number | null;
-    complexity: number | null;
-    churn: number | null;
-    dependencies: string;
-    test_security_signals: {
-      defect_density: number | null;
-      compliance_fail_count: number | null;
-      license_blocking: boolean | null;
-    };
-    exact_reason: string;
-  }>;
-  root_cause_intelligence?: {
-    module: string;
-    dependency_evidence: string;
-    shap_evidence: any;
-    supported: boolean;
-  };
-  risk_time_machine?: any;
-  preventive_action_plan?: Array<{
-    action: string;
-    priority: string;
-    expected_risk_reduction_pct: number;
-    effort: string;
-    cost: string;
-    days_saved: number;
-    confidence: number;
-  }>;
-  intervention_roi?: {
-    interventions_compared: InterventionItem[];
-    recommended_highest_value_action: string;
-    selection_basis: string;
-  };
-  compliance_intelligence?: any;
-  code_provenance_legal_risk?: any;
-  github_intelligence?: any;
-  confidence_and_evidence?: {
-    model: string;
-    model_confidence_pct: number;
-    supporting_metrics: Record<string, number | null>;
-    top_failure_probabilities: any[];
-    top_shap_features: any[];
-    data_source: string;
-  };
-  final_decision_panel?: {
-    question: string;
-    top_3_actions: Array<{
-      rank: number;
-      action: string;
-      expected_impact: string;
-      owner_suggestion: string;
-      urgency: string;
-      confidence: number;
-    }>;
-    overall_urgency: string;
-  };
+// ----------------------------------------------------------------------------
+// 14 Core Risk Intelligence Capabilities Types
+// ----------------------------------------------------------------------------
+
+export interface QualityFusionDimension {
+  maintainability: number;
+  complexity_health: number;
+  architectural_cohesion: number;
+  security_posture: number;
+  reliability_stability: number;
 }
 
-// --- Compliance Types ---
-export interface SOC2EvidenceItem {
-  control_id: string;
-  domain: string;
-  description: string;
-  status: 'PASS' | 'FAIL' | 'NEEDS_REVIEW';
-  evidence_note: string;
-  collected_at: string;
+export interface QualityFusionRadarPoint {
+  dimension: string;
+  score: number;
+  benchmark: number;
 }
 
-export interface SOC2Report {
-  report_id: string;
-  generated_at: string;
-  compliance_score: number;
-  pass_count: number;
-  fail_count: number;
-  needs_review_count: number;
-  overall_status: 'COMPLIANT' | 'NON_COMPLIANT' | 'PARTIAL';
-  evidence_items: SOC2EvidenceItem[];
-  freshness_hours: number;
-  is_fresh: boolean;
-  integrity_hash: string;
-  audit_trail: Array<{ event: string; actor: string; timestamp: string }>;
+export interface QualityFusionScore {
+  composite_score: number;
+  grade: 'A+' | 'A' | 'B' | 'C' | 'D' | 'F';
+  grade_label: string;
+  dimensions: QualityFusionDimension;
+  summary_radar: QualityFusionRadarPoint[];
 }
 
-export interface PredictiveCompliance {
-  current_risk_score: number;
-  projected_30d_risk: number;
-  compliance_drift_rate_per_day: number;
-  predictive_alerts: Array<{ severity: string; message: string }>;
-  recommendation: string;
-}
-
-export interface LicenseReport {
-  total_packages: number;
-  packages_analyzed: number;
-  license_alerts: Array<{ package: string; version: string; license: string; severity: string; message: string }>;
-  critical_license_count: number;
-  high_risk_license_count: number;
-  release_blocking: boolean;
-  release_block_reason: string | null;
-  package_details: Array<{ name: string; version: string; license: string; risk: string; is_copyleft: boolean }>;
-}
-
-// --- Collaboration Types ---
-export interface CollabComment {
+export interface SASTFinding {
   id: string;
-  author: string;
-  content: string;
-  comment_type: 'COMMENT' | 'CHANGE_REQUEST' | 'APPROVAL';
-  created_at: string;
+  file: string;
+  line_number: number;
+  code_snippet: string;
+  category: string;
+  cwe: string;
+  severity: 'CRITICAL' | 'HIGH' | 'MEDIUM' | 'LOW';
+  taint_source: string;
+  taint_sink: string;
+  impact: string;
+  remediation: string;
+  confidence: string;
 }
 
-export interface ApprovalRecord {
-  id: string;
-  approver: string;
-  decision: 'APPROVED' | 'REJECTED';
-  notes?: string;
-  decided_at: string;
+export interface DeepHybridSASTReport {
+  total_findings: number;
+  critical_count: number;
+  high_count: number;
+  medium_count: number;
+  taint_flows_detected: number;
+  security_rating: string;
+  security_score: number;
+  findings: SASTFinding[];
 }
 
-// --- Provenance Types ---
-export interface ProvenanceReport {
-  generated_at: string;
-  total_files_analyzed: number;
+export interface ReachablePackage {
+  package_name: string;
+  version: string;
+  license: string;
+  reachability_status: 'DIRECT_REACHABLE' | 'UNREACHABLE_GHOST';
+  call_depth: number;
+  calling_files_count: number;
+  sample_calling_files: string[];
+  has_known_cve: boolean;
+  cve_id?: string | null;
+  cve_severity: string;
+  cve_description?: string | null;
+  risk_impact: string;
+  exploitability_rating: string;
+}
+
+export interface ReachabilityReport {
+  total_dependencies_audited: number;
+  reachable_count: number;
+  ghost_count: number;
+  reachable_percentage: number;
+  ghost_percentage: number;
+  vulnerable_reachable_count: number;
+  reachability_health_score: number;
+  attack_surface_status: string;
+  reachable_packages: ReachablePackage[];
+  ghost_packages: ReachablePackage[];
+}
+
+export interface ModuleArchitectureMetric {
+  module: string;
+  afferent_coupling_ca: number;
+  efferent_coupling_ce: number;
+  instability: number;
+  abstractness: number;
+  distance_from_main_sequence: number;
+  architecture_zone: 'ZONE_OF_PAIN' | 'ZONE_OF_USELESSNESS' | 'BALANCED_MAIN_SEQUENCE';
+  is_circular: boolean;
+}
+
+export interface GodModule {
+  module: string;
+  betweenness_centrality: number;
+  total_coupling: number;
+  loc: number;
+  bottleneck_severity: string;
+  risk_driver: string;
+}
+
+export interface ArchitectureRiskReport {
+  architecture_risk_index: number;
+  architecture_health_grade: string;
+  modularity_q_score: number;
+  graph_density: number;
+  total_nodes: number;
+  total_edges: number;
+  circular_cycles_count: number;
+  circular_cycles: string[][];
+  god_modules_count: number;
+  god_modules: GodModule[];
+  zone_of_pain_modules_count: number;
+  zone_of_uselessness_modules_count: number;
+  module_metrics_sample: ModuleArchitectureMetric[];
+}
+
+export interface LanguageDistributionItem {
+  language: string;
+  files_count: number;
+  loc: number;
+  loc_percentage: number;
+  avg_complexity: number;
+  avg_maintainability: number;
+  health_rating: 'OPTIMAL' | 'NEEDS_REVIEW' | 'HIGH_DEBT';
+}
+
+export interface PolyglotMeshReport {
+  total_loc: number;
+  language_distribution: LanguageDistributionItem[];
+  primary_language: string;
+  average_complexity: number;
+  average_maintainability: number;
+  total_defect_markers: number;
+  polyglot_languages_count: number;
+}
+
+export interface AIProvenanceGate {
+  gate_status: 'PASSED' | 'WARN' | 'BLOCKED';
+  gate_reason: string;
   human_contribution_pct: number;
   ai_contribution_pct: number;
-  unknown_contribution_pct: number;
+  max_allowed_ai_pct: number;
   ai_tools_detected: Record<string, number>;
-  commit_lineage: Array<{ sha: string; author: string; date: string; message: string; ai_assisted: boolean }>;
-  license_detections: Array<{ file: string; license: string; method: string }>;
-  unique_licenses: string[];
-  signed_hash: string;
-  license_summary?: string;
-  authorship_attribution?: string;
-  ma_ip_summary: {
-    human_pct: number;
-    ai_pct: number;
-    ai_tools: string[];
-    license_count: number;
-    copyleft_present: boolean;
-    report_note: string;
-  };
+  unreviewed_ai_modules_count: number;
+  unreviewed_modules_sample: string[];
+  compliance_badge: string;
 }
 
-// --- GitHub Summary ---
+export interface AIDebtLedger {
+  ai_authored_loc: number;
+  refactoring_liability_hours: number;
+  estimated_remediation_cost_usd: number;
+  volatility_multiplier: number;
+  debt_risk_category: string;
+  remediation_priority_modules: string[];
+}
+
+export interface AnonymizedTeamCohort {
+  cohort_role: string;
+  member_count: number;
+  ownership_share_pct: number;
+  burnout_exposure: 'CRITICAL' | 'HIGH' | 'MODERATE' | 'LOW';
+}
+
+export interface TeamGovernanceReport {
+  bus_factor: number;
+  knowledge_silo_index: number;
+  team_sustainability_score: number;
+  contributors_count: number;
+  workload_distribution_entropy: number;
+  anonymized_cohorts: AnonymizedTeamCohort[];
+  privacy_standard: string;
+}
+
+export interface PolicyRule {
+  rule_id: string;
+  title: string;
+  category: string;
+  threshold: string;
+  actual_value: string;
+  status: 'PASS' | 'FAIL' | 'WARN';
+  severity: 'CRITICAL' | 'HIGH' | 'MEDIUM';
+  remediation: string;
+}
+
+export interface PolicyCatalogReport {
+  total_rules_evaluated: number;
+  passed_rules_count: number;
+  failed_rules_count: number;
+  policy_compliance_pct: number;
+  overall_status: 'COMPLIANT' | 'NON_COMPLIANT';
+  policy_rules: PolicyRule[];
+}
+
+export interface AutoTriageItem {
+  ticket_id: string;
+  title: string;
+  category: string;
+  priority: 'P0' | 'P1' | 'P2' | 'P3';
+  severity: string;
+  target_file: string;
+  estimated_effort_hours: number;
+  action_type: string;
+  summary: string;
+}
+
+export interface VerifiedFixPR {
+  pr_id: string;
+  title: string;
+  target_file: string;
+  category: string;
+  verification_status: string;
+  risk_reduction_pct: number;
+  diff: string;
+  commit_message: string;
+  explanation: string;
+}
+
+export interface PortfolioHealthProject {
+  project_id: string;
+  project_name: string;
+  risk_score: number;
+  complexity: number;
+  coupling: number;
+  status: string;
+}
+
+export interface PortfolioHealthReport {
+  portfolio_projects_count: number;
+  portfolio_aggregate_risk: number;
+  portfolio_risk_grade: string;
+  benchmark_average_complexity: number;
+  benchmark_average_coupling: number;
+  project_comparison_matrix: PortfolioHealthProject[];
+}
+
+// ----------------------------------------------------------------------------
+// Master Dashboard Data Container
+// ----------------------------------------------------------------------------
+export interface EvidenceQuality {
+  evidence_quality_score: number;
+  completeness_pct: number;
+  freshness_label: string;
+  source_reliability_score: number;
+  missing_metrics_count: number;
+  historical_coverage_score: number;
+  confidence_vs_quality_summary: string;
+}
+
+export interface ModelPerformance {
+  accuracy: number;
+  precision: number;
+  recall: number;
+  f1_score: number;
+  mae: number;
+  rmse: number;
+  roc_auc: number;
+  calibration_points: Array<{ predicted_probability: number; actual_frequency: number }>;
+  prediction_vs_actual: Array<{ sample: string; predicted_risk: number; actual_risk: number; error: number }>;
+  feature_drift_psi: number;
+  concept_drift_status: string;
+}
+
 export interface GitHubSummary {
   owner: string;
   repo: string;
@@ -342,47 +445,39 @@ export interface GitHubSummary {
   sbom_package_count: number;
 }
 
-export interface EvidenceQuality {
-  evidence_quality_score: number;
-  completeness_pct: number;
-  freshness_label: string;
-  source_reliability_score: number;
-  missing_metrics_count: number;
-  historical_coverage_score: number;
-  confidence_vs_quality_summary: string;
+export interface SOC2Report {
+  report_id: string;
+  generated_at: string;
+  compliance_score: number;
+  pass_count: number;
+  fail_count: number;
+  needs_review_count: number;
+  overall_status: string;
+  evidence_items: Array<{ control_id: string; domain: string; description: string; status: string; evidence_note: string }>;
 }
 
-export interface CalibrationPoint {
-  predicted_probability: number;
-  actual_frequency: number;
+export interface PredictiveCompliance {
+  current_risk_score: number;
+  projected_30d_risk: number;
+  compliance_drift_rate_per_day: number;
+  predictive_alerts: Array<{ severity: string; message: string }>;
+  recommendation: string;
 }
 
-export interface PredictionVsActualSample {
-  sample: string;
-  predicted_risk: number;
-  actual_risk: number;
-  error: number;
+export interface CollabComment {
+  id: string;
+  author: string;
+  content: string;
+  comment_type: 'COMMENT' | 'CHANGE_REQUEST' | 'APPROVAL';
+  created_at: string;
 }
 
-export interface ModelPerformance {
-  accuracy: number;
-  precision: number;
-  recall: number;
-  f1_score: number;
-  mae: number;
-  rmse: number;
-  roc_auc: number;
-  calibration_points: CalibrationPoint[];
-  prediction_vs_actual: PredictionVsActualSample[];
-  feature_drift_psi: number;
-  concept_drift_status: string;
-}
-
-export interface HighRiskDefectArea {
-  module: string;
-  expected_defects: number;
-  risk_contribution: string;
-  trend: 'ESCALATING' | 'STABLE' | 'DECREASING';
+export interface ApprovalRecord {
+  id: string;
+  approver: string;
+  decision: 'APPROVED' | 'REJECTED';
+  notes?: string;
+  decided_at: string;
 }
 
 export interface DefectForecast {
@@ -391,7 +486,7 @@ export interface DefectForecast {
   predicted_delay_days: number[];
   cumulative_defect_growth?: number[];
   expected_defects_total?: number;
-  high_risk_defect_areas?: HighRiskDefectArea[];
+  high_risk_defect_areas?: Array<{ module: string; expected_defects: number; risk_contribution: string; trend: string }>;
   trend_comparison?: {
     current_period_defects: number;
     previous_period_baseline: number;
@@ -449,6 +544,69 @@ export interface LicenseIPGovernance {
   };
 }
 
+export interface MultiProjectComparisonData {
+  current_project_complexity: number;
+  benchmark_average_complexity: number;
+  current_project_coupling: number;
+  benchmark_average_coupling: number;
+  portfolio_aggregate_risk?: number;
+  portfolio_risk_grade?: string;
+  portfolio_projects_count?: number;
+  project_comparison_matrix?: Array<{
+    project_id: string;
+    project_name: string;
+    risk_score: number;
+    failure_probability: string;
+    team_health_score: number;
+    compliance_score: number;
+    hotspots_count: number;
+    recommended_intervention: string;
+  }>;
+}
+
+export interface RootCauseCluster {
+  id: string;
+  category: string;
+  color: string;
+  description: string;
+  module_count: number;
+  average_risk: number;
+  top_affected_modules: string[];
+  severity: 'CRITICAL' | 'HIGH' | 'MODERATE';
+}
+
+export interface LicenseReport {
+  total_packages: number;
+  packages_analyzed: number;
+  license_alerts: Array<{ package: string; version: string; license: string; severity: string; message: string }>;
+  critical_license_count: number;
+  high_risk_license_count?: number;
+  release_blocking: boolean;
+  release_block_reason?: string | null;
+  package_details?: Array<{ name: string; version: string; license: string; risk: string; is_copyleft: boolean }>;
+}
+
+export interface ProvenanceReport {
+  generated_at: string;
+  total_files_analyzed: number;
+  human_contribution_pct: number;
+  ai_contribution_pct: number;
+  unknown_contribution_pct?: number;
+  ai_tools_detected: Record<string, number>;
+  unique_licenses: string[];
+  signed_hash?: string;
+  license_summary?: string;
+  authorship_attribution?: string;
+  ma_ip_summary?: {
+    human_pct: number;
+    ai_pct: number;
+    ai_tools: string[];
+    license_count: number;
+    copyleft_present: boolean;
+    report_note: string;
+  };
+}
+
 export interface ScopeDriftStep {
   step_index: number;
   step_name: string;
@@ -466,41 +624,8 @@ export interface ScopeDriftIntelligence {
   schedule_delay_days: number;
   risk_increase_delta: number;
   new_projected_risk: number;
-  pipeline_steps: ScopeDriftStep[];
+  pipeline_steps?: ScopeDriftStep[];
   summary: string;
-}
-
-export interface ProjectComparisonItem {
-  project_id: string;
-  project_name: string;
-  risk_score: number;
-  failure_probability: string;
-  team_health_score: number;
-  compliance_score: number;
-  hotspots_count: number;
-  recommended_intervention: string;
-}
-
-export interface MultiProjectComparisonData {
-  current_project_complexity: number;
-  benchmark_average_complexity: number;
-  current_project_coupling: number;
-  benchmark_average_coupling: number;
-  portfolio_aggregate_risk?: number;
-  portfolio_risk_grade?: string;
-  portfolio_projects_count?: number;
-  project_comparison_matrix?: ProjectComparisonItem[];
-}
-
-export interface RootCauseCluster {
-  id: string;
-  category: string;
-  color: string;
-  description: string;
-  module_count: number;
-  average_risk: number;
-  top_affected_modules: string[];
-  severity: 'CRITICAL' | 'HIGH' | 'MODERATE';
 }
 
 export interface DashboardData {
@@ -521,6 +646,8 @@ export interface DashboardData {
     defect_density: number;
     sprint_velocity: number;
     churn_rate: number;
+    average_maintainability?: number;
+    primary_language?: string;
   };
   hotspots: Array<{
     file: string;
@@ -539,28 +666,79 @@ export interface DashboardData {
     shap_feature_importance: SHAPItem[];
     forecasts: DefectForecast;
     burnout_analysis: BurnoutAnalysis;
-    scope_adjusted_risk?: number;
   };
+  // 14 Core Capabilities
+  quality_fusion: QualityFusionScore;
+  sast_analysis: DeepHybridSASTReport;
+  reachability_analysis: ReachabilityReport;
+  architecture_risk: ArchitectureRiskReport;
+  polyglot_mesh: PolyglotMeshReport;
+  provenance_gate: AIProvenanceGate;
+  ai_debt_ledger: AIDebtLedger;
+  team_governance: TeamGovernanceReport;
+  policy_catalog: PolicyCatalogReport;
+  auto_triage_backlog: AutoTriageItem[];
+  verified_fix_prs: VerifiedFixPR[];
+  portfolio_health: PortfolioHealthReport;
+  
   network_graph: NetworkGraph & { root_cause_clusters?: RootCauseCluster[] };
   similarity: {
-    has_historical_comparison?: boolean;
-    message?: string;
-    top_matching_project?: SimilarityProject;
     similar_projects: SimilarityProject[];
-    multi_project_comparison: MultiProjectComparisonData;
+    multi_project_comparison?: MultiProjectComparisonData;
   };
   time_machine: TimeMachineData;
   intervention_roi: InterventionROI;
   scope_drift?: ScopeDriftIntelligence;
+// ---------------------------------------------------------------------------
+// Evidence-Based Executive Decision Engine Types
+// ---------------------------------------------------------------------------
+
+export interface ExecutiveDecisionEvidence {
+  primary_metric?: string;
+  primary_value?: number | string | null;
+  secondary_metric?: string;
+  secondary_value?: number | string | null;
+  file?: string;
+  complexity?: number | null;
+  coupling?: number | null;
+  defect_density?: number | null;
+  risk_score?: number | null;
+  critical_sast_count?: number | null;
+  burnout_risk_score?: number | null;
+  compliance_failures?: number | null;
+  [key: string]: string | number | null | undefined;
+}
+
+export interface ExecutiveDecision {
+  rank: number;
+  decision: string;
+  why: string;
+  evidence: ExecutiveDecisionEvidence;
+  affected_files: string[];
+  expected_risk_reduction_pct: number | null;
+  estimated_effort: 'LOW' | 'MEDIUM' | 'HIGH';
+  effort_days: number | null;
+  days_saved: number | null;
+  owner: string;
+  urgency: 'IMMEDIATE' | 'HIGH' | 'MODERATE' | 'LOW';
+  confidence_pct: number | null;
+  measurable_target: string;
+  source: string;
+}
+
+export interface ExecutiveDecisionPanel {
+  decisions: ExecutiveDecision[];
+  overall_recommendation: string;
+  source: string;
+  evidence_grounded: boolean;
+}
+
   ai_explanations: {
     source: string;
     executive_summary: string;
-    executive_risk_summary?: Record<string, any>;
     report_sections: Array<{ section: string; content: string }>;
     preventive_recommendations: string[];
-    preventive_action_plan?: any[];
-    final_decision_panel?: any;
-    intelligence_sections?: IntelligenceSections;
+    executive_decisions?: ExecutiveDecisionPanel;
   };
   compliance_report?: SOC2Report;
   predictive_compliance?: PredictiveCompliance;

@@ -1,6 +1,6 @@
 import numpy as np
 import pandas as pd
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional
 from sklearn.ensemble import RandomForestClassifier, RandomForestRegressor
 import shap
 import logging
@@ -30,14 +30,14 @@ class MLEngineService:
 
     def __init__(self):
         self._is_trained = False
-        self.rf_risk = RandomForestRegressor(n_estimators=50, random_state=42)
-        self.rf_classifier = RandomForestClassifier(n_estimators=50, random_state=42)
+        self.rf_risk = RandomForestRegressor(n_estimators=60, random_state=42)
+        self.rf_classifier = RandomForestClassifier(n_estimators=60, random_state=42)
         self._bootstrap_models()
 
     def _bootstrap_models(self):
-        """Train baseline ML models on synthetic synthetic training data so predictions run instantly."""
+        """Train baseline ML models on synthetic benchmark training data."""
         np.random.seed(42)
-        N = 300
+        N = 350
         
         # Synthetic features: [complexity, coupling, loc, defect_density, churn, velocity_var]
         X = np.zeros((N, 6))
@@ -83,10 +83,100 @@ class MLEngineService:
         self.explainer = shap.TreeExplainer(self.rf_risk)
         self._is_trained = True
 
-    def predict_project_health(self, metrics: Dict[str, Any], hotspots: List[Dict[str, Any]]) -> Dict[str, Any]:
-        """Runs full ML pipeline on extracted project metrics. Returns insufficient evidence state when no code detected."""
+    def calculate_quality_fusion_score(
+        self,
+        metrics: Dict[str, Any],
+        parsed_files: List[Dict[str, Any]],
+        sast_data: Optional[Dict[str, Any]] = None,
+        arch_data: Optional[Dict[str, Any]] = None
+    ) -> Dict[str, Any]:
+        """Calculates the composite Quality Fusion Score (0-100) fusing multi-dimensional software metrics."""
+        sast = sast_data or {}
+        arch = arch_data or {}
+
+        c_comp = float(metrics.get("cyclomatic_complexity", 15.0))
+        d_dens = float(metrics.get("defect_density", 0.5))
+        churn = float(metrics.get("churn_rate", 0.2))
         
-        # Construct feature vector strictly from actual computed metrics
+        # Dimension 1: Maintainability (0-100)
+        avg_mi = float(metrics.get("average_maintainability", 0.0))
+        if avg_mi == 0.0 and parsed_files:
+            avg_mi = sum(f.get("maintainability_index", 75.0) for f in parsed_files) / len(parsed_files)
+        maintainability_score = round(max(10.0, min(100.0, avg_mi or 78.0)), 1)
+
+        # Dimension 2: Complexity Health (0-100, where lower complexity = higher score)
+        complexity_score = round(max(10.0, min(100.0, 100.0 - (c_comp * 2.2))), 1)
+
+        # Dimension 3: Architectural Cohesion (0-100)
+        arch_risk = float(arch.get("architecture_risk_index", 30.0))
+        arch_cohesion_score = round(max(10.0, min(100.0, 100.0 - arch_risk * 0.8)), 1)
+
+        # Dimension 4: Security Posture (0-100)
+        security_score = float(sast.get("security_score", 92.0))
+
+        # Dimension 5: Reliability & Defect Stability (0-100)
+        reliability_score = round(max(10.0, min(100.0, 100.0 - (d_dens * 22.0) - (churn * 35.0))), 1)
+
+        # Weighted Fusion Composite Calculation
+        # Weights: Maintainability 25%, Complexity 20%, Architecture 20%, Security 20%, Reliability 15%
+        composite = (
+            maintainability_score * 0.25 +
+            complexity_score * 0.20 +
+            arch_cohesion_score * 0.20 +
+            security_score * 0.20 +
+            reliability_score * 0.15
+        )
+        composite_score = round(max(12.0, min(99.5, composite)), 1)
+
+        # Letter Grade
+        if composite_score >= 90:
+            grade = "A+"
+            grade_label = "EXEMPLARY_PRODUCTION_QUALITY"
+        elif composite_score >= 80:
+            grade = "A"
+            grade_label = "HIGH_INTEGRITY_CODEBASE"
+        elif composite_score >= 70:
+            grade = "B"
+            grade_label = "SOLID_WITH_MANAGEABLE_DEBT"
+        elif composite_score >= 60:
+            grade = "C"
+            grade_label = "ELEVATED_DEFECT_VULNERABILITY"
+        elif composite_score >= 45:
+            grade = "D"
+            grade_label = "HIGH_STRUCTURAL_DECAY"
+        else:
+            grade = "F"
+            grade_label = "CRITICAL_REFACTORING_REQUIRED"
+
+        return {
+            "composite_score": composite_score,
+            "grade": grade,
+            "grade_label": grade_label,
+            "dimensions": {
+                "maintainability": maintainability_score,
+                "complexity_health": complexity_score,
+                "architectural_cohesion": arch_cohesion_score,
+                "security_posture": security_score,
+                "reliability_stability": reliability_score
+            },
+            "summary_radar": [
+                {"dimension": "Maintainability", "score": maintainability_score, "benchmark": 75},
+                {"dimension": "Complexity Health", "score": complexity_score, "benchmark": 70},
+                {"dimension": "Architecture Cohesion", "score": arch_cohesion_score, "benchmark": 65},
+                {"dimension": "Security Posture", "score": security_score, "benchmark": 80},
+                {"dimension": "Reliability & Stability", "score": reliability_score, "benchmark": 70}
+            ]
+        }
+
+    def predict_project_health(
+        self,
+        metrics: Dict[str, Any],
+        hotspots: List[Dict[str, Any]],
+        sast_data: Optional[Dict[str, Any]] = None,
+        arch_data: Optional[Dict[str, Any]] = None
+    ) -> Dict[str, Any]:
+        """Runs full ML pipeline on extracted project metrics."""
+        
         c_comp = float(metrics.get("cyclomatic_complexity", 0.0))
         d_coup = float(metrics.get("dependency_coupling", 0.0))
         loc = float(metrics.get("lines_of_code", 0.0))
@@ -94,7 +184,6 @@ class MLEngineService:
         churn = float(metrics.get("churn_rate", 0.0))
         vel_var = float(metrics.get("author_distribution_entropy", 0.0)) * 15.0
 
-        # EVIDENCE GUARD: If no lines of code extracted, ML predictions are unreliable
         if loc == 0 and c_comp == 0:
             return {
                 "is_insufficient_evidence": True,
@@ -116,6 +205,13 @@ class MLEngineService:
 
         # 1. Overall Risk Score Prediction
         predicted_risk = float(self.rf_risk.predict(x_in)[0])
+        
+        # Factor in SAST and Architecture findings if present
+        if sast_data and sast_data.get("critical_count", 0) > 0:
+            predicted_risk += min(sast_data["critical_count"] * 4.5, 15.0)
+        if arch_data and arch_data.get("circular_cycles_count", 0) > 0:
+            predicted_risk += min(arch_data["circular_cycles_count"] * 3.0, 12.0)
+
         predicted_risk = round(max(12.0, min(predicted_risk, 98.5)), 1)
 
         # 2. Failure Type Classification & Probabilities
@@ -123,7 +219,7 @@ class MLEngineService:
         top_class_idx = int(np.argmax(class_probs))
         primary_failure_type = FAILURE_TYPES[top_class_idx]
 
-        # 3. First-Failure Ranking (Rank all failure modes by predicted probability)
+        # 3. First-Failure Ranking
         failure_rankings = []
         for idx, prob in enumerate(class_probs):
             failure_rankings.append({
@@ -136,7 +232,6 @@ class MLEngineService:
         for i, item in enumerate(failure_rankings):
             item["rank"] = i + 1
 
-        # Attach evidence and affected files to each failure ranking
         hotspot_files = [h.get("file", "") for h in hotspots[:5]] if hotspots else []
         failure_evidence_map = {
             "Architecture Drift & Structural Coupling": {
@@ -192,25 +287,20 @@ class MLEngineService:
             })
         shap_summary.sort(key=lambda x: abs(x["shap_impact"]), reverse=True)
 
-        # Model confidence: derived from RF prediction variance across trees
         tree_preds = np.array([tree.predict(x_in)[0] for tree in self.rf_risk.estimators_])
         pred_std = float(np.std(tree_preds))
-        # Confidence: higher std = lower confidence; normalize to 0-100
         model_confidence = round(max(0.0, min(100.0, 100.0 - (pred_std / 15.0) * 100.0)), 1)
 
-        # 5. Advanced Defect & Delay Forecast (Time Series Curve for 7, 14, 21, 30 days)
+        # 5. Defect & Delay Forecast
         forecast_days = [7, 14, 21, 30]
         base_defects = d_dens * 10
         base_delay = (predicted_risk / 100.0) * 12.0
 
         defects_forecast = [round(base_defects + (d * 0.45 * (predicted_risk / 50.0)), 1) for d in forecast_days]
         delay_days_forecast = [round(base_delay + (d * 0.35 * (d_coup + 0.2)), 1) for d in forecast_days]
-
-        # Cumulative defect growth curve & expected defect totals
         growth_curve = [round(defects_forecast[i] * (1.1 ** i), 1) for i in range(len(forecast_days))]
         expected_defects_total = int(round(defects_forecast[-1] * 1.5))
         
-        # High risk defect modules
         high_risk_defect_areas = []
         for h in (hotspots[:3] if hotspots else []):
             fname = h.get("file", "main_module")
@@ -242,17 +332,14 @@ class MLEngineService:
         burnout_level = "CRITICAL" if burnout_score > 75 else "HIGH" if burnout_score > 50 else "LOW"
 
         # 7. Evidence Quality Score Calculation
-        # Completeness: how many expected metrics are present and non-zero out of 6
         metric_keys = ["cyclomatic_complexity", "dependency_coupling", "lines_of_code", "defect_density", "churn_rate", "author_distribution_entropy"]
         present_count = sum(1 for k in metric_keys if metrics.get(k) is not None and float(metrics.get(k, 0)) > 0)
         completeness_pct = round((present_count / len(metric_keys)) * 100, 1)
         missing_metrics_count = len(metric_keys) - present_count
 
-        # Freshness & reliability
         freshness_label = "Real-time Source Evidence" if loc > 0 else "Analysis Pending Additional Data"
         source_reliability = 95.0 if loc > 1000 and present_count >= 5 else 80.0 if present_count >= 3 else 60.0
         historical_coverage = 88.0 if present_count >= 4 else 50.0
-
         evidence_quality_score = round((completeness_pct * 0.4) + (source_reliability * 0.3) + (historical_coverage * 0.3), 1)
 
         evidence_quality = {
@@ -269,7 +356,6 @@ class MLEngineService:
         }
 
         # 8. Model Performance & Calibration Metrics
-        # Derived from offline validation benchmark & active random forest tree ensemble
         accuracy = 0.912
         precision = 0.895
         recall = 0.884
@@ -292,7 +378,7 @@ class MLEngineService:
             {"sample": "Historical Repo #3", "predicted_risk": round(predicted_risk * 0.8, 1), "actual_risk": round(predicted_risk * 0.83, 1), "error": round(abs(predicted_risk * 0.03), 1)},
         ]
 
-        feature_drift_psi = round(0.042 + (0.01 if churn > 0.4 else 0.0), 3) # < 0.1 indicates minimal drift
+        feature_drift_psi = round(0.042 + (0.01 if churn > 0.4 else 0.0), 3)
         concept_drift_status = "STABLE — Model in Optimal Calibration Zone" if feature_drift_psi < 0.1 else "MODERATE_DRIFT"
 
         model_performance = {
@@ -336,4 +422,3 @@ class MLEngineService:
         }
 
 ml_service = MLEngineService()
-

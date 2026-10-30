@@ -204,6 +204,7 @@ async def analyze_github_repo(repo_url: str, token: Optional[str] = None) -> Dic
         sampled_paths = (priority + rest)[:_MAX_FILES_SAMPLED]
 
         parsed_files: List[Dict[str, Any]] = []
+        raw_files_with_content: List[Dict[str, str]] = []
         detected_secrets: List[Dict[str, str]] = []
         blocked_files: List[str] = []
 
@@ -224,6 +225,7 @@ async def analyze_github_repo(repo_url: str, token: Optional[str] = None) -> Dic
             detected_secrets.extend(secrets)
 
             parsed_files.append(_parse_file_content(path, sanitized))
+            raw_files_with_content.append({"file": path, "content": sanitized})
 
     # ── Derived metrics ─────────────────────────────────────────────────────
     now = datetime.datetime.now(datetime.timezone.utc)
@@ -355,6 +357,7 @@ async def analyze_github_repo(repo_url: str, token: Optional[str] = None) -> Dic
         "hotspots": hotspots,
         "file_tree": [f["file"] for f in parsed_files],
         "parsed_files": parsed_files,
+        "raw_files_with_content": raw_files_with_content,
         "detected_secrets": detected_secrets,
         "blocked_files": blocked_files,
         "is_insufficient_evidence": total_loc == 0,

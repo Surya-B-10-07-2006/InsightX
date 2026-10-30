@@ -224,7 +224,8 @@ class ProjectParserService:
                 },
                 "hotspots": [],
                 "file_tree": [],
-                "parsed_files": []
+                "parsed_files": [],
+                "raw_files_with_content": []
             }
 
         # Calculate aggregated project metrics from actual detected files
@@ -241,6 +242,23 @@ class ProjectParserService:
         variance = sum((r - mean_risk) ** 2 for r in risk_scores) / max(len(risk_scores), 1)
         churn_rate = round(min(math.sqrt(variance) / 100.0, 0.95), 2)
         defect_density = round(defect_markers / max(total_loc / 1000.0, 1.0), 3)
+
+        # Collect raw files with content for SAST & pipeline
+        raw_files_with_content = []
+        with zipfile.ZipFile(io.BytesIO(contents)) as zf:
+            for zip_info in zf.infolist():
+                if zip_info.is_dir():
+                    continue
+                fn = zip_info.filename
+                is_allowed, _ = SecurityInspector.is_file_allowed(fn)
+                ext = os.path.splitext(fn)[1].lower()
+                if is_allowed and ext in allowed_extensions:
+                    try:
+                        c_text = zf.read(fn).decode("utf-8", errors="ignore")
+                        san, _ = SecurityInspector.sanitize_text_and_detect_keys(c_text)
+                        raw_files_with_content.append({"file": fn, "content": san})
+                    except Exception:
+                        pass
 
         return {
             "source_type": "PROJECT_ZIP",
@@ -261,5 +279,7 @@ class ProjectParserService:
             },
             "hotspots": sorted_hotspots,
             "file_tree": [f["file"] for f in parsed_files],
-            "parsed_files": parsed_files
+            "parsed_files": parsed_files,
+            "raw_files_with_content": raw_files_with_content
         }
+

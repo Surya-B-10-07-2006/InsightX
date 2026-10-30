@@ -7,7 +7,7 @@ import logging
 
 from config import settings
 from database import db_manager
-from routers import auth, upload, ml, alerts
+from routers import auth, upload, ml
 from routers import github, compliance, collaboration, provenance
 
 logging.basicConfig(
@@ -20,6 +20,31 @@ logger = logging.getLogger("InsightX.Main")
 async def lifespan(app: FastAPI):
     logger.info("Initializing InsightX Backend Services & Database Engine...")
     await db_manager.initialize()
+    
+    # Validate Groq API configuration at startup
+    if settings.GROQ_API_KEY and len(settings.GROQ_API_KEY.strip()) > 5:
+        try:
+            from groq import Groq
+            from services.llm_service import _get_groq_model
+            client = Groq(api_key=settings.GROQ_API_KEY.strip())
+            
+            # Validate both executive and lightweight models
+            executive_model = _get_groq_model(use_case="executive")
+            lightweight_model = _get_groq_model(use_case="lightweight")
+            
+            # Test API connectivity with executive model (primary)
+            test_response = client.chat.completions.create(
+                messages=[{"role": "user", "content": "test"}],
+                model=executive_model,
+                max_tokens=1,
+                timeout=5.0
+            )
+            logger.info(f"Groq API validation successful. Executive model: {executive_model}, Lightweight model: {lightweight_model}")
+        except Exception as e:
+            logger.error(f"Groq API validation failed: {e}. Executive decisions will fail without valid Groq configuration.")
+    else:
+        logger.warning("Groq API key not configured. Executive decisions will fail without valid Groq API key.")
+    
     yield
     logger.info("InsightX Backend shut down cleanly.")
 
@@ -32,7 +57,12 @@ app = FastAPI(
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],
+    allow_origins=[
+        "http://localhost:5173",
+        "http://127.0.0.1:5173",
+        "http://localhost:5174",
+        "http://127.0.0.1:5174",
+    ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -42,8 +72,6 @@ app.add_middleware(
 app.include_router(auth.router)
 app.include_router(upload.router)
 app.include_router(ml.router)
-app.include_router(alerts.router)
-
 # New feature routers
 app.include_router(github.router)
 app.include_router(compliance.router)

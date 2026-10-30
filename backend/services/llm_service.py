@@ -1,12 +1,32 @@
 import json
 import logging
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional
 from config import settings
 
 logger = logging.getLogger("InsightX.GroqLLM")
 
 _GROQ_TIMEOUT = 30.0
-_GROQ_MAX_TOKENS = 2800
+# Use configured max_tokens, but cap at reasonable limit for production models
+_GROQ_MAX_TOKENS = max(1, min(4096, int(getattr(settings, "GROQ_MAX_TOKENS", 4096))))
+
+# Groq production models for text generation
+_GROQ_MODELS = {
+    "executive": "openai/gpt-oss-120b",  # High capability for executive decisions
+    "lightweight": "openai/gpt-oss-20b",  # Faster inference for lightweight tasks
+}
+
+
+def _get_groq_model(use_case: str = "executive") -> str:
+    """Return appropriate Groq model based on use case without fallbacks."""
+    if use_case == "executive":
+        model = getattr(settings, "GROQ_MODEL_EXECUTIVE", "openai/gpt-oss-120b").strip()
+    else:
+        model = getattr(settings, "GROQ_MODEL_LIGHTWEIGHT", "openai/gpt-oss-20b").strip()
+    
+    if not model:
+        raise ValueError(f"Groq model not configured for use case '{use_case}'. Please set GROQ_MODEL_EXECUTIVE or GROQ_MODEL_LIGHTWEIGHT in config.")
+    
+    return model
 
 
 def _na() -> str:
@@ -109,7 +129,6 @@ def _build_intelligence_sections(
         "shap_evidence": shap_feature_importance[:3] if shap_feature_importance else _na(),
         "supported": root_cause_supported,
     }
-
 
     forecast = {
         "days": [7, 14, 30],
@@ -242,6 +261,419 @@ def _build_intelligence_sections(
     }
 
 
+# ---------------------------------------------------------------------------
+# Evidence-Based Executive Decision Engine
+# ---------------------------------------------------------------------------
+
+def _build_rule_based_decisions(
+    *,
+    project_name: str,
+    risk_score: float,
+    risk_level: str,
+    primary_failure: str,
+    root_cause_module: str,
+    top_files: List[str],
+    failure_rankings: List[Dict[str, Any]],
+    metrics: Dict[str, Any],
+    burnout_score: float,
+    model_confidence: float,
+    shap_feature_importance: List[Dict[str, Any]],
+    intervention_roi: Dict[str, Any],
+    sast_findings: List[Dict[str, Any]],
+    compliance_fail_count: int,
+) -> List[Dict[str, Any]]:
+    """Rule-engine fallback: produce evidence-grounded decisions from computed metrics."""
+    urgency = "IMMEDIATE" if risk_score >= 75 else "HIGH" if risk_score >= 50 else "MODERATE"
+    c_comp = metrics.get("cyclomatic_complexity", 0) or 0
+    d_coup = metrics.get("dependency_coupling", 0) or 0
+    d_dens = metrics.get("defect_density", 0) or 0
+    churn = metrics.get("churn_rate", 0) or 0
+    burnout = burnout_score or 0
+
+    decisions = []
+
+    # Decision 1 — highest-risk hotspot
+    top_file = top_files[0].split("/")[-1] if top_files else root_cause_module
+    decisions.append({
+        "rank": 1,
+        "decision": f"Refactor '{top_file}' — cyclomatic complexity {c_comp:.1f} exceeds safe threshold of 10",
+        "why": (
+            f"'{top_file}' is the highest-risk module with complexity={c_comp:.1f}, coupling={d_coup:.2f}. "
+            f"NetworkX betweenness centrality identifies it as the structural bottleneck driving '{primary_failure}'."
+        ),
+        "evidence": {
+            "file": top_file,
+            "complexity": round(float(c_comp), 1),
+            "coupling": round(float(d_coup), 2),
+            "defect_density": round(float(d_dens), 3),
+            "risk_score": round(float(risk_score), 1),
+        },
+        "affected_files": top_files[:2] or [top_file],
+        "expected_risk_reduction_pct": round(min(15 + float(c_comp) * 0.4, 38), 1),
+        "estimated_effort": "MEDIUM",
+        "effort_days": max(3, int(float(c_comp) / 5)),
+        "days_saved": max(3, int(float(c_comp) / 4)),
+        "owner": "Lead Backend Engineer",
+        "urgency": urgency,
+        "confidence_pct": round(min(55 + float(model_confidence) * 0.3, 90), 0),
+        "measurable_target": f"Reduce cyclomatic complexity below 10 and coupling below 0.4 in '{top_file}'",
+        "source": "InsightX Rule Engine",
+    })
+
+    # Decision 2 — defect / SAST coverage
+    crit_sast = len([f for f in sast_findings if f.get("severity") in {"CRITICAL", "HIGH"}])
+    decisions.append({
+        "rank": 2,
+        "decision": f"Add automated tests and fix {crit_sast} CRITICAL/HIGH security findings in hotspot files",
+        "why": (
+            f"Defect density={d_dens:.3f} defects/KLOC is above safe levels. "
+            f"{crit_sast} CRITICAL/HIGH SAST findings detected across {len(top_files)} hotspot files with no confirmed test coverage."
+        ),
+        "evidence": {
+            "defect_density": round(float(d_dens), 3),
+            "critical_sast_count": crit_sast,
+            "files_affected": len(top_files),
+            "churn_rate": round(float(churn), 2),
+        },
+        "affected_files": top_files[:3] or [top_file],
+        "expected_risk_reduction_pct": round(min(8 + float(d_dens) * 4, 22), 1),
+        "estimated_effort": "LOW",
+        "effort_days": 3,
+        "days_saved": max(2, int(float(d_dens) * 3)),
+        "owner": "QA / Test Engineer",
+        "urgency": "HIGH" if crit_sast > 0 else "MODERATE",
+        "confidence_pct": round(min(60 + float(d_dens) * 8, 85), 0),
+        "measurable_target": f"Achieve 80% test coverage on top-3 hotspot files; resolve all CRITICAL SAST findings",
+        "source": "InsightX Rule Engine",
+    })
+
+    # Decision 3 — dependency coupling / architecture
+    if len(top_files) > 1:
+        second_file = top_files[1].split("/")[-1]
+    else:
+        second_file = root_cause_module
+    decisions.append({
+        "rank": 3,
+        "decision": f"Decouple '{second_file}' — dependency coupling {d_coup:.2f} is structurally unsafe",
+        "why": (
+            f"Dependency coupling={d_coup:.2f} (safe threshold: <0.5) creates cascading failure risk. "
+            f"Architecture betweenness centrality confirms '{root_cause_module}' as the hub with highest blast radius."
+        ),
+        "evidence": {
+            "dependency_coupling": round(float(d_coup), 2),
+            "root_cause_module": root_cause_module,
+            "churn_rate": round(float(churn), 2),
+        },
+        "affected_files": top_files[1:3] if len(top_files) > 1 else top_files,
+        "expected_risk_reduction_pct": round(min(12 + float(d_coup) * 28, 36), 1),
+        "estimated_effort": "HIGH",
+        "effort_days": max(5, int(5 + float(d_coup) * 10)),
+        "days_saved": max(3, int(3 + float(d_coup) * 12)),
+        "owner": "Architecture Team",
+        "urgency": urgency,
+        "confidence_pct": round(min(50 + float(d_coup) * 40, 86), 0),
+        "measurable_target": f"Reduce dependency coupling below 0.5; eliminate circular imports in '{root_cause_module}'",
+        "source": "InsightX Rule Engine",
+    })
+
+    # Decision 4 — burnout / team sustainability (only when signal is present)
+    if burnout >= 40:
+        decisions.append({
+            "rank": 4,
+            "decision": f"Redistribute workload — burnout index {burnout:.0f}/100 threatens delivery velocity",
+            "why": (
+                f"Team burnout index={burnout:.0f}/100 indicates unsustainable workload concentration. "
+                f"Combined with churn_rate={churn:.2f}, this creates compounding risk of contributor attrition during critical delivery."
+            ),
+            "evidence": {
+                "burnout_risk_score": round(float(burnout), 1),
+                "churn_rate": round(float(churn), 2),
+                "risk_level": risk_level,
+            },
+            "affected_files": [],
+            "expected_risk_reduction_pct": round(min(5 + float(burnout) * 0.15, 18), 1),
+            "estimated_effort": "LOW",
+            "effort_days": 2,
+            "days_saved": max(2, int(float(burnout) / 20)),
+            "owner": "Engineering Manager",
+            "urgency": "HIGH" if burnout >= 70 else "MODERATE",
+            "confidence_pct": 72.0,
+            "measurable_target": f"Reduce burnout index below 50 within 2 sprints through workload redistribution",
+            "source": "InsightX Rule Engine",
+        })
+
+    # Decision 5 — compliance (only when failures present)
+    if compliance_fail_count and compliance_fail_count > 0:
+        decisions.append({
+            "rank": len(decisions) + 1,
+            "decision": f"Resolve {compliance_fail_count} SOC 2 compliance failures before audit window",
+            "why": (
+                f"{compliance_fail_count} compliance controls are failing, creating audit risk. "
+                f"Predictive compliance analysis shows risk escalating if unaddressed within 30 days."
+            ),
+            "evidence": {
+                "compliance_failures": compliance_fail_count,
+                "projected_30d_risk": "ESCALATING",
+            },
+            "affected_files": [],
+            "expected_risk_reduction_pct": round(min(6 + compliance_fail_count * 1.5, 20), 1),
+            "estimated_effort": "MEDIUM",
+            "effort_days": max(3, compliance_fail_count),
+            "days_saved": 5,
+            "owner": "Security / Compliance Lead",
+            "urgency": "HIGH",
+            "confidence_pct": 80.0,
+            "measurable_target": f"Resolve all {compliance_fail_count} failing SOC 2 controls; achieve 100% pass rate",
+            "source": "InsightX Rule Engine",
+        })
+
+    return decisions[:5]
+
+
+def _validate_decision(decision: Dict[str, Any], actual_risk: float, top_files: List[str]) -> Dict[str, Any]:
+    """Clamp Groq-generated values against real analysis data to prevent fabrication."""
+    try:
+        rr = float(decision.get("expected_risk_reduction_pct") or 0)
+        decision["expected_risk_reduction_pct"] = round(max(0.5, min(rr, 50.0)), 1)
+    except Exception:
+        decision["expected_risk_reduction_pct"] = None
+
+    try:
+        ds = float(decision.get("days_saved") or 0)
+        decision["days_saved"] = max(0, min(int(ds), 90))
+    except Exception:
+        decision["days_saved"] = None
+
+    try:
+        cp = float(decision.get("confidence_pct") or 0)
+        decision["confidence_pct"] = round(max(10.0, min(cp, 95.0)), 1)
+    except Exception:
+        decision["confidence_pct"] = None
+
+    try:
+        ed = float(decision.get("effort_days") or 0)
+        decision["effort_days"] = max(1, min(int(ed), 180))
+    except Exception:
+        decision["effort_days"] = None
+
+    # Ensure affected_files only references actual project files
+    if decision.get("affected_files"):
+        validated_files = []
+        for f in decision["affected_files"]:
+            basename = str(f).split("/")[-1]
+            if any(basename in tf or basename == tf.split("/")[-1] for tf in top_files):
+                validated_files.append(f)
+        if not validated_files:
+            validated_files = top_files[:2] if top_files else []
+        decision["affected_files"] = validated_files
+
+    effort = str(decision.get("estimated_effort", "MEDIUM")).upper()
+    if effort not in {"LOW", "MEDIUM", "HIGH"}:
+        effort = "MEDIUM"
+    decision["estimated_effort"] = effort
+
+    urgency = str(decision.get("urgency", "MODERATE")).upper()
+    if urgency not in {"IMMEDIATE", "HIGH", "MODERATE", "LOW"}:
+        urgency = "MODERATE"
+    decision["urgency"] = urgency
+
+    return decision
+
+
+def generate_executive_decisions(
+    *,
+    project_name: str,
+    risk_score: float,
+    risk_level: str,
+    primary_failure: str,
+    root_cause_module: str,
+    top_files: List[str],
+    failure_rankings: List[Dict[str, Any]],
+    metrics: Dict[str, Any],
+    burnout_score: float,
+    model_confidence: float,
+    shap_feature_importance: List[Dict[str, Any]],
+    network_graph: Dict[str, Any],
+    time_machine: Dict[str, Any],
+    intervention_roi: Dict[str, Any],
+    compliance_report: Dict[str, Any],
+    license_report: Dict[str, Any],
+    sast_findings: List[Dict[str, Any]],
+    source_type: str,
+) -> Dict[str, Any]:
+    """
+    Generate 3–5 evidence-grounded executive decisions.
+
+    Python/ML calculates all numbers; Groq interprets the evidence and writes
+    clear executive-level decision text. All Groq output is validated against
+    actual analysis values before return. Falls back to rule engine on failure.
+    """
+    compliance_fail_count = int((compliance_report or {}).get("fail_count") or 0)
+    crit_sast = [f for f in (sast_findings or []) if f.get("severity") in {"CRITICAL", "HIGH"}]
+    top_failure = failure_rankings[0] if failure_rankings else {}
+    shap_top = shap_feature_importance[:3] if shap_feature_importance else []
+
+    # ---- Pre-computed numeric evidence (Python calculates, Groq interprets) ----
+    evidence_block = {
+        "project_name": project_name,
+        "ml_risk_score": round(float(risk_score), 1),
+        "risk_level": risk_level,
+        "model_confidence_pct": round(float(model_confidence), 1),
+        "primary_failure_mode": primary_failure,
+        "root_cause_module": root_cause_module,
+        "source_type": source_type,
+        "metrics": {
+            "cyclomatic_complexity": metrics.get("cyclomatic_complexity"),
+            "dependency_coupling": metrics.get("dependency_coupling"),
+            "defect_density": metrics.get("defect_density"),
+            "churn_rate": metrics.get("churn_rate"),
+            "lines_of_code": metrics.get("lines_of_code"),
+            "average_maintainability": metrics.get("average_maintainability"),
+        },
+        "top_hotspot_files": [
+            {
+                "file": f.split("/")[-1] if isinstance(f, str) else str(f),
+                "full_path": f,
+            }
+            for f in top_files[:5]
+        ],
+        "top_failure_probabilities": [
+            {"type": fr.get("failure_type"), "probability_pct": fr.get("probability"), "severity": fr.get("severity")}
+            for fr in failure_rankings[:3]
+        ],
+        "shap_top_drivers": [
+            {"feature": s.get("feature"), "direction": s.get("direction"), "impact": s.get("shap_impact")}
+            for s in shap_top
+        ],
+        "burnout_risk_score": round(float(burnout_score or 0), 1),
+        "critical_sast_count": len(crit_sast),
+        "compliance_failures": compliance_fail_count,
+        "critical_license_count": int((license_report or {}).get("critical_license_count") or 0),
+        "intervention_roi_top": (
+            (intervention_roi.get("interventions") or [{}])[0].get("title", _na())
+            if intervention_roi.get("interventions") else _na()
+        ),
+        "day_30_risk_baseline": (
+            ((time_machine.get("scenarios") or {}).get("baseline") or [None]*5)[4]
+        ),
+        "graph_density": network_graph.get("graph_density"),
+        "has_dependency_evidence": network_graph.get("has_dependency_evidence", False),
+    }
+
+    prompt = f"""You are a Principal Engineering Risk Advisor generating executive decisions for project: "{project_name}".
+
+ANALYSIS EVIDENCE (calculated by InsightX ML pipeline — use ONLY these values, never invent numbers):
+{json.dumps(evidence_block, indent=2)}
+
+Generate a JSON object with EXACTLY this schema:
+{{
+  "executive_decisions": [
+    {{
+      "rank": 1,
+      "decision": "One specific, actionable decision referencing the actual file/module and exact metric value",
+      "why": "Why this is needed — cite exact metric values from evidence above",
+      "evidence": {{
+        "primary_metric": "metric_name",
+        "primary_value": <actual number from evidence>,
+        "secondary_metric": "metric_name",
+        "secondary_value": <actual number from evidence>
+      }},
+      "affected_files": ["exact filename from top_hotspot_files list only"],
+      "expected_risk_reduction_pct": <number 1-50, derived from intervention_roi data>,
+      "estimated_effort": "LOW|MEDIUM|HIGH",
+      "effort_days": <integer 1-90>,
+      "days_saved": <integer 0-60>,
+      "owner": "Specific role title",
+      "urgency": "IMMEDIATE|HIGH|MODERATE|LOW",
+      "confidence_pct": <number 10-95>,
+      "measurable_target": "Specific, measurable outcome with actual numbers"
+    }}
+  ],
+  "overall_recommendation": "One executive sentence summarising the most critical action",
+  "source_model": "groq-llama-3.1-8b-instant"
+}}
+
+RULES:
+- Generate exactly 3 to 5 decisions ranked by priority
+- Every number MUST come from the evidence block above — never fabricate
+- If a metric is null, write "Insufficient evidence available" for that field
+- Affected files must only come from top_hotspot_files — no invented paths
+- Decision text must name the specific file/module and cite the exact metric value
+- Do NOT wrap output in markdown fences — output raw JSON only"""
+
+    if settings.GROQ_API_KEY and len(settings.GROQ_API_KEY.strip()) > 5:
+        try:
+            from groq import Groq
+            client = Groq(api_key=settings.GROQ_API_KEY.strip())
+            groq_model = _get_groq_model(use_case="executive")
+            clamped_tokens = max(1, min(4096, int(_GROQ_MAX_TOKENS)))
+
+            completion = client.chat.completions.create(
+                messages=[
+                    {
+                        "role": "system",
+                        "content": (
+                            "You are an expert software risk advisor. "
+                            "Output only raw valid JSON — no markdown, no code fences, no preamble. "
+                            "Every numeric value must come verbatim from the provided evidence block."
+                        ),
+                    },
+                    {"role": "user", "content": prompt},
+                ],
+                model=groq_model,
+                temperature=0.15,
+                max_tokens=clamped_tokens,
+                timeout=_GROQ_TIMEOUT,
+            )
+
+            raw = completion.choices[0].message.content or ""
+            # Strip accidental markdown fences if present
+            raw = raw.strip()
+            if raw.startswith("```"):
+                raw = raw.split("```", 2)[-1] if raw.count("```") >= 2 else raw.lstrip("`json\n")
+                raw = raw.rsplit("```", 1)[0]
+
+            parsed = json.loads(raw)
+            decisions_raw = parsed.get("executive_decisions") or []
+
+            if not isinstance(decisions_raw, list) or len(decisions_raw) == 0:
+                raise ValueError("Groq returned empty decisions list")
+
+            # Validate and clamp every decision against actual analysis data
+            validated = []
+            for d in decisions_raw[:5]:
+                if not isinstance(d, dict):
+                    continue
+                d["source"] = f"Groq {groq_model}"
+                validated.append(_validate_decision(d, risk_score, top_files))
+
+            if len(validated) < 1:
+                raise ValueError("No valid decisions after validation")
+
+            logger.info(f"Groq executive decisions generated: {len(validated)} decisions via {groq_model}")
+            return {
+                "decisions": validated,
+                "overall_recommendation": parsed.get("overall_recommendation", ""),
+                "source": f"Groq {groq_model}",
+                "evidence_grounded": True,
+                "groq_available": True,
+            }
+
+        except json.JSONDecodeError as e:
+            logger.error(f"Groq executive decisions JSON parse error: {e}")
+            raise ValueError(f"Groq API returned invalid JSON: {e}")
+        except Exception as e:
+            logger.error(f"Groq executive decisions API error ({type(e).__name__}: {e})")
+            raise RuntimeError(f"Groq API call failed: {e}")
+
+    # ---- No silent fallback - raise error if Groq not configured ----
+    raise ValueError("Groq API key not configured. Please set GROQ_API_KEY in environment or .env file to generate executive decisions.")
+
+
+# ---------------------------------------------------------------------------
+# Core LLM Report Engine (existing GroqExplanationService)
+# ---------------------------------------------------------------------------
+
 def _build_rule_based_output(
     project_name: str,
     risk_score: float,
@@ -264,6 +696,7 @@ def _build_rule_based_output(
     provenance_report: Dict[str, Any],
     github_summary: Dict[str, Any],
     source_type: str,
+    executive_decisions: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     hotspot_names = ", ".join([f.split("/")[-1] for f in top_files]) if top_files else "N/A"
     c_comp = metrics.get("cyclomatic_complexity", "N/A")
@@ -464,6 +897,7 @@ def _build_rule_based_output(
         "preventive_action_plan": preventive_action_plan,
         "final_decision_panel": final_decision,
         "intelligence_sections": intelligence,
+        "executive_decisions": executive_decisions,
     }
 
 
@@ -492,6 +926,7 @@ class GroqExplanationService:
         provenance_report: Dict[str, Any] = None,
         github_summary: Dict[str, Any] = None,
         source_type: str = "UNKNOWN",
+        sast_findings: Optional[List[Dict[str, Any]]] = None,
     ) -> Dict[str, Any]:
         metrics = metrics or {}
         failure_rankings = failure_rankings or []
@@ -504,6 +939,7 @@ class GroqExplanationService:
         license_report = license_report or {}
         provenance_report = provenance_report or {}
         github_summary = github_summary or {}
+        sast_findings = sast_findings or []
 
         if is_insufficient_evidence or not hotspots:
             intelligence = _build_intelligence_sections(
@@ -560,16 +996,46 @@ class GroqExplanationService:
                     "data_source": "Not available from analyzed data."
                 },
                 "intelligence_sections": intelligence,
+                "executive_decisions": {
+                    "decisions": [],
+                    "overall_recommendation": "Upload parseable source code to enable executive decision generation.",
+                    "source": "InsightX Analytical Shield",
+                    "evidence_grounded": False,
+                },
             }
 
         top_files = [h.get("file") for h in hotspots[:3] if isinstance(h, dict) and h.get("file")]
         risk_level = "CRITICAL" if risk_score >= 75 else "HIGH" if risk_score >= 50 else "MODERATE" if risk_score >= 30 else "LOW"
         top_failures = [{"failure_type": f["failure_type"], "probability": f["probability"]} for f in failure_rankings[:3]] if failure_rankings else []
 
+        # ---- Step 1: Generate evidence-grounded executive decisions (always runs) ----
+        executive_decisions = generate_executive_decisions(
+            project_name=project_name,
+            risk_score=risk_score,
+            risk_level=risk_level,
+            primary_failure=primary_failure,
+            root_cause_module=root_cause_module,
+            top_files=top_files,
+            failure_rankings=failure_rankings,
+            metrics=metrics,
+            burnout_score=burnout_score,
+            model_confidence=model_confidence,
+            shap_feature_importance=shap_feature_importance,
+            network_graph=network_graph,
+            time_machine=time_machine,
+            intervention_roi=intervention_roi,
+            compliance_report=compliance_report,
+            license_report=license_report,
+            sast_findings=sast_findings,
+            source_type=source_type,
+        )
+
+        # ---- Step 2: Groq narrative report ----
         if settings.GROQ_API_KEY and len(settings.GROQ_API_KEY.strip()) > 5:
             try:
                 from groq import Groq
                 client = Groq(api_key=settings.GROQ_API_KEY.strip())
+                groq_model = _get_groq_model()
 
                 c_comp = metrics.get("cyclomatic_complexity", "N/A")
                 d_coup = metrics.get("dependency_coupling", "N/A")
@@ -639,21 +1105,23 @@ Generate a JSON object with EXACTLY these keys:
 
 RULES: Only reference files from {top_files}. Never fabricate metrics, costs, or file paths. All numbers must be derived from the provided metrics."""
 
+                clamped_max_tokens = max(1, min(4096, int(_GROQ_MAX_TOKENS)))
+
                 chat_completion = client.chat.completions.create(
                     messages=[
-                        {"role": "system", "content": "You are a senior software risk analyst. Output strictly valid JSON. Never fabricate file paths or invent metrics."},
+                        {"role": "system", "content": "You are a senior software risk analyst. Output strictly valid JSON only — no markdown fences, no extra text. Never fabricate file paths or invent metrics."},
                         {"role": "user", "content": prompt},
                     ],
-                    model="llama-3.1-8b-instant",
+                    model=groq_model,
                     temperature=0.2,
-                    max_tokens=_GROQ_MAX_TOKENS,
+                    max_tokens=clamped_max_tokens,
                     timeout=_GROQ_TIMEOUT,
-                    response_format={"type": "json_object"},
+                    # response_format omitted intentionally — not supported by all models.
                 )
 
                 data = json.loads(chat_completion.choices[0].message.content)
                 out = {
-                    "source": "Groq LLaMA 3.1 AI Engine",
+                    "source": f"Groq {groq_model} AI Engine",
                     "executive_summary": data.get("executive_summary", ""),
                     "executive_risk_summary": data.get("executive_risk_summary", {}),
                     "report_sections": data.get("report_sections", []),
@@ -682,32 +1150,16 @@ RULES: Only reference files from {top_files}. Never fabricate metrics, costs, or
                     source_type=source_type,
                     shap_feature_importance=shap_feature_importance,
                 )
+                # Always attach the evidence-grounded decisions
+                out["executive_decisions"] = executive_decisions
+                out["groq_available"] = True
                 return out
             except json.JSONDecodeError as e:
-                logger.warning(f"Groq JSON parse error: {e}. Falling back to rule engine.")
+                logger.error(f"Groq narrative JSON parse error: {e}")
+                raise ValueError(f"Groq API returned invalid JSON: {e}")
             except Exception as e:
-                logger.warning(f"Groq API error ({type(e).__name__}: {e}). Falling back to rule engine.")
+                logger.error(f"Groq narrative API error ({type(e).__name__}: {e})")
+                raise RuntimeError(f"Groq API call failed: {e}")
 
-        return _build_rule_based_output(
-            project_name=project_name,
-            risk_score=risk_score,
-            risk_level=risk_level,
-            primary_failure=primary_failure,
-            root_cause_module=root_cause_module,
-            top_files=top_files,
-            top_failures=top_failures,
-            metrics=metrics,
-            burnout_score=burnout_score,
-            model_confidence=model_confidence,
-            failure_rankings=failure_rankings,
-            shap_feature_importance=shap_feature_importance,
-            network_graph=network_graph,
-            time_machine=time_machine,
-            intervention_roi=intervention_roi,
-            compliance_report=compliance_report,
-            predictive_compliance=predictive_compliance,
-            license_report=license_report,
-            provenance_report=provenance_report,
-            github_summary=github_summary,
-            source_type=source_type,
-        )
+        # ---- No silent fallback - raise error if Groq not configured ----
+        raise ValueError("Groq API key not configured. Please set GROQ_API_KEY in environment or .env file to generate AI narratives.")

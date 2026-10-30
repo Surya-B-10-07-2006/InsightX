@@ -45,6 +45,7 @@ async def upload_file(
         "hotspots": parsed_data["hotspots"],
         "file_tree": parsed_data.get("file_tree", []),
         "parsed_files": parsed_data.get("parsed_files", []),
+        "raw_files_with_content": parsed_data.get("raw_files_with_content", []),
         "detected_secrets": parsed_data.get("detected_secrets", []),
         "blocked_files": parsed_data.get("blocked_files", []),
         "status": "PARSED"
